@@ -5,6 +5,7 @@ Sketch program made in C
 ## Building
 
 If on windows, use build.bat after initializing cl.exe (MSVC) with vcvarsall.bat
+
 Warning: Must have sdl2.dll beside executable
 
 ## Licenses
