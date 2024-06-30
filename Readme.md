@@ -2,6 +2,10 @@
 
 Sketch program made in C
 
+## Dependencies
+
+- [SDL2](https://www.libsdl.org/)
+
 ## Building
 
 If on windows, use build.bat after initializing cl.exe (MSVC) with vcvarsall.bat
