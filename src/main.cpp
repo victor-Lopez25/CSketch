@@ -7,8 +7,12 @@ void InitUndoData(undo_data *UndoData, SDL_Renderer *Renderer, int DrawingWidth,
     {
         UndoData->Bitmaps[i] = 
             SDL_CreateTexture(Renderer, SDL_PIXELFORMAT_ARGB8888, 
-                              SDL_TEXTUREACCESS_STREAMING, DrawingWidth, DrawingHeight);
+                              SDL_TEXTUREACCESS_TARGET, DrawingWidth, DrawingHeight);
     }
+    
+    UndoData->EarliestBitmap = 
+        SDL_CreateTexture(Renderer, SDL_PIXELFORMAT_ARGB8888, 
+                          SDL_TEXTUREACCESS_TARGET, DrawingWidth, DrawingHeight);
     
     UndoData->Used = 0;
     UndoData->FirstFreeLine = 0;
@@ -40,6 +44,33 @@ void GetNewLineOp(undo_data *UndoData, memory_arena **Arena, line_operation *Lin
     }
 }
 
+void UseDrawOp(SDL_Renderer *Renderer, draw_operation *DrawOp)
+{
+    scc(SDL_SetRenderDrawColor(Renderer, DrawOp->Color.r, DrawOp->Color.g, DrawOp->Color.b, DrawOp->Color.a));
+    switch(DrawOp->Kind) {
+        case DrawOp_Line:
+        {
+            for(line_operation *LineOp = &DrawOp->Line.Operation;
+                LineOp;
+                LineOp = LineOp->Next)
+            {
+                for(int i = 0; i < LineOp->Used; i++)
+                {
+                    line *Line = LineOp->Lines + i;
+                    SDL_RenderDrawLine(Renderer, Line->Start.x, Line->Start.y, Line->End.x, Line->End.y);
+                }
+            }
+        } break;
+        
+        case DrawOp_Point:
+        case DrawOp_StraightLine:
+        {
+            printf("unimplemented");
+            Assert(0);
+        } break;
+    }
+}
+
 void PushDrawLine(undo_data *UndoData, memory_arena **Arena, SDL_Renderer *Renderer, line *Line)
 {
     draw_operation *CurrentDrawOp = UndoData->DrawOps + UndoData->FirstDrawOp;
@@ -62,6 +93,9 @@ void PushDrawLine(undo_data *UndoData, memory_arena **Arena, SDL_Renderer *Rende
         if(UndoData->FirstDrawOp == UndoData->LastDrawOp && 
            UndoData->Used != 0) {
             // NOTE(vic): Get rid of last draw op
+            SDL_SetRenderTarget(Renderer, UndoData->EarliestBitmap);
+            UseDrawOp(Renderer, UndoData->DrawOps + UndoData->LastDrawOp);
+            
             UndoData->LastDrawOp++;
             if(UndoData->LastDrawOp > DRAW_OPS_QUEUE_SIZE) {
                 UndoData->LastDrawOp = 0;
@@ -71,17 +105,49 @@ void PushDrawLine(undo_data *UndoData, memory_arena **Arena, SDL_Renderer *Rende
         draw_operation *NewDrawOp = UndoData->DrawOps + UndoData->FirstDrawOp;
         NewDrawOp->Kind = DrawOp_Line;
         GetNewLineOp(UndoData, Arena, &NewDrawOp->Line.Operation);
+        
+        int nthOp = UndoData->FirstDrawOp - DRAW_BITMAP_BUFFER_SIZE - 1;
+        if(nthOp < 0) {
+            nthOp = DRAW_OPS_QUEUE_SIZE + nthOp;
+        }
+        int iterations = MIN(DRAW_BITMAP_BUFFER_SIZE, UndoData->Used);
+        for(int i = 0; i < iterations; i++)
+        {
+            int DrawOpIndex = (nthOp + i) % DRAW_BITMAP_BUFFER_SIZE;
+            draw_operation *DrawOp = UndoData->DrawOps + DrawOpIndex;
+            SDL_Texture *tex = UndoData->Bitmaps[DRAW_BITMAP_BUFFER_SIZE - i];
+            
+            SDL_SetRenderTarget(Renderer, tex);
+            UseDrawOp(Renderer, DrawOp);
+        }
     }
     
+    DEC_CLIP_0_S32(UndoData->CurrentUndoIndex);
+    UndoData->Used++;
+    UndoData->Used = MIN(UndoData->Used, DRAW_BITMAP_BUFFER_SIZE);
     SDL_RenderDrawLine(Renderer, Line->Start.x, Line->Start.y, Line->End.x, Line->End.y);
 }
 
-// SdlCheckCode
-void scc(int code)
+void UndoOperation(undo_data *UndoData, SDL_Renderer *Renderer)
 {
-    if(code < 0) {
-        fprintf(stderr, "SDL ERROR: %s\n", SDL_GetError());
-        exit(1);
+    // TODO(vic): First try, look into this because it's likely buggy
+    if(UndoData->Used > 0) {
+        if(UndoData->CurrentUndoIndex < DRAW_BITMAP_BUFFER_SIZE) {
+            // TODO(vic): Only copy the parts that changed from the previous bitmap
+            SDL_RenderCopy(Renderer, UndoData->Bitmaps[UndoData->CurrentUndoIndex], 
+                           NULL, NULL);
+        }
+        else {
+            SDL_RenderCopy(Renderer, UndoData->EarliestBitmap, NULL, NULL);
+            for(int i = 0; i < (DRAW_OPS_QUEUE_SIZE - UndoData->CurrentUndoIndex); i++)
+            {
+                int DrawOpIndex = (UndoData->LastDrawOp + i) % DRAW_OPS_QUEUE_SIZE;
+                draw_operation *DrawOp = UndoData->DrawOps + DrawOpIndex;
+                UseDrawOp(Renderer, DrawOp);
+            }
+        }
+        
+        UndoData->CurrentUndoIndex++;
     }
 }
 
@@ -112,7 +178,7 @@ int main(int argc, char **argv)
     }
     
     SDL_Renderer *Renderer =
-        SDL_CreateRenderer(Window, -1, SDL_RENDERER_ACCELERATED);
+        SDL_CreateRenderer(Window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
     if(!Renderer) {
         fprintf(stderr, "Could not create SDL Renderer: %s\n", SDL_GetError());
         exit(1);
@@ -134,7 +200,6 @@ int main(int argc, char **argv)
     
     s32 PrevX = -1;
     s32 PrevY = -1;
-    bool DrawLine = false;
     bool MouseIsDown = false;
     int WindowWidth = INIT_WINDOW_WIDTH;
     int WindowHeight = INIT_WINDOW_HEIGHT;
@@ -152,10 +217,18 @@ int main(int argc, char **argv)
         InitializeArena(Arena, ARENA_MEMORY_SIZE, Mem);
     }
     
+    undo_data *UndoData = PushStruct(&Arena, undo_data);
+    InitUndoData(UndoData, Renderer, INIT_WINDOW_WIDTH, INIT_WINDOW_HEIGHT);
+    
+    bool Draw = false;
+    SDL_Point DrawDotBuffer[10];
     bool quit = false;
     while(!quit)
     {
         const Uint32 start = SDL_GetTicks();
+        bool ShouldDrawDot = false;
+        int DrawDotIndex = 0;
+        
         SDL_Event Event = {0};
         while(SDL_PollEvent(&Event))
         {
@@ -197,10 +270,12 @@ int main(int argc, char **argv)
                 {
                     s32 x = Event.motion.x;
                     s32 y = Event.motion.y;
-                    if(MouseIsDown) {
-                        if(DrawLine) {
-                            SDL_RenderDrawLine(Renderer, PrevX, PrevY, x, y);
+                    if(MouseIsDown && Draw) {
+                        if(ShouldDrawDot) {
+                            ShouldDrawDot = false;
+                            DrawDotIndex--;
                         }
+                        SDL_RenderDrawLine(Renderer, PrevX, PrevY, x, y);
                     }
                     PrevX = x;
                     PrevY = y;
@@ -216,12 +291,12 @@ int main(int argc, char **argv)
                         scc(SDL_SetRenderDrawColor(Renderer, PenR.r, PenR.g, PenR.b, PenR.a));
                     }
                     
-                    DrawLine = true;
+                    Draw = true;
                     MouseIsDown = true;
                     
                     s32 x = Event.button.x;
                     s32 y = Event.button.y;
-                    SDL_RenderDrawPoint(Renderer, x, y);
+                    DrawDotBuffer[DrawDotIndex++] = {x, y};
                     PrevX = x;
                     PrevY = y;
                 } break;
@@ -229,9 +304,13 @@ int main(int argc, char **argv)
                 case SDL_MOUSEBUTTONUP:
                 {
                     MouseIsDown = false;
+                    ShouldDrawDot = true;
+                    // commit undo?
                 } break;
             }
         }
+        
+        SDL_RenderDrawPoints(Renderer, DrawDotBuffer, DrawDotIndex);
         
 #if 0
         scc(SDL_SetRenderDrawColor(Renderer, 0, 0, 0, 0));
