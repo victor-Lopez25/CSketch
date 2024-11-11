@@ -1,5 +1,5 @@
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_timer.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -11,8 +11,12 @@
 #define debug_log(...)
 #endif
 
+// gcc can't find min/max on my computer
+// temporary solution
+#if defined(__GNUC__) || defined(__GNUG__)
 #define max(a, b) ((a) > (b)) ? (a) : (b)
 #define min(a, b) ((a) > (b)) ? (b) : (a)
+#endif
 
 typedef Sint8 i8;
 typedef Sint16 i16;
@@ -195,7 +199,7 @@ void SaveToFile(editor_data *Editor, char *Filename)
 // oldSize must be in bytes, newSize in u32s
 void ResizeBitmapMem(bitmap *Bitmap, int NewSize, int *Cap)
 {
-  if(NewSize > (*Cap*sizeof(Bitmap->Bytes[0]))) {
+  if((size_t)NewSize > (*Cap*sizeof(Bitmap->Bytes[0]))) {
 		*Cap = NewSize + (int)(Bitmap->Width*8 + Bitmap->Height*8);
 		
     void *temp = realloc(Bitmap->Bytes, *Cap*sizeof(Bitmap->Bytes[0]));
@@ -598,7 +602,7 @@ int main()
       SDL_DelayPrecise(Duration);
     }
     else {
-      debug_log("Missed target fps: %I64u\n", Duration/1000000);
+      debug_log("Missed target fps: %fs\n", (f32)Duration/1000000);
     }
     Duration = SDL_GetTicksNS() - StartTicks;
     DeltaTime = (f32)Duration / 1000000000.0f;
