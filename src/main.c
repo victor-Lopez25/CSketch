@@ -192,8 +192,13 @@ bitmap MakeEmptyBitmap(int cap)
 
 void SaveToFile(editor_data *Editor, char *Filename)
 {
-	(void)Editor; (void)Filename;
-  Assert(!"unimplemented");
+	SDL_Surface *SaveSurface = SDL_CreateSurface(0, 0, SDL_PIXELFORMAT_RGBA32);
+  SaveSurface->w = Editor->Bitmap.Width;
+  SaveSurface->h = Editor->Bitmap.Height;
+  SaveSurface->pitch = Editor->Bitmap.Width*sizeof(Editor->Bitmap.Bytes[0]);
+  SaveSurface->pixels = Editor->Bitmap.Bytes;
+  
+  scc(SDL_SaveBMP(SaveSurface, Filename));
 }
 
 // oldSize must be in bytes, newSize in u32s
@@ -452,11 +457,19 @@ int main()
         } break;
         
         case SDL_EVENT_KEY_UP: {
-          case SDLK_LCTRL:
-          case SDLK_RCTRL: {
-            FrameInput.Ctrl.Down = false;
-            FrameInput.Ctrl.Up = true;
-          } break;
+          switch(Event.key.key) {
+            case SDLK_LCTRL:
+            case SDLK_RCTRL: {
+              FrameInput.Ctrl.Down = false;
+              FrameInput.Ctrl.Up = true;
+            } break;
+            
+            case SDLK_S: {
+              if(FrameInput.Ctrl.Down) {
+                SaveToFile(Editor, "sketch.bmp");
+              }
+            } break;
+          }
         } break;
         
         case SDL_EVENT_MOUSE_BUTTON_DOWN: {
