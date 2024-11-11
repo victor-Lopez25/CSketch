@@ -10,8 +10,9 @@ WARNING: This is not complete yet!
 
 ## Building
 
-If on windows, use build.bat after initializing cl.exe (MSVC) with vcvarsall.bat
-Must have SDL3.dll (at least version 3.1.6) in bin directory
+If on windows, use build.bat after initializing cl.exe (MSVC) with vcvarsall.bat.
+
+Must have SDL3.dll (at least version 3.1.6) in bin directory.
 
 ## Licenses
 
