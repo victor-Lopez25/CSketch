@@ -17,7 +17,7 @@ build.bat
 
 Linux:
 ```
-build.sh
+./build.sh
 ```
 
 Must have SDL2.dll in the same directory as executable
