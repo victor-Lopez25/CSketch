@@ -11,10 +11,14 @@ WARNING: This is not complete yet!
 ## Building
 
 Windows:
->build.bat
+```
+build.bat
+```
 
 Linux:
->build.sh
+```
+build.sh
+```
 
 Must have SDL2.dll in the same directory as executable
 
