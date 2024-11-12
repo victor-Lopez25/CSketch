@@ -1,19 +1,23 @@
 ## CPixelSketch
 
-Sketch program made in C with SDL3
+Sketch program made in Odin with SDL2
 
 WARNING: This is not complete yet!
 
 ## Dependencies
 
-- [SDL3](https://github.com/libsdl-org/SDL/releases/tag/preview-3.1.6)
+- SDL2
 
 ## Building
 
-If on windows, use build.bat after initializing cl.exe (MSVC) with vcvarsall.bat.
+Windows:
+>build.bat
 
-Must have SDL3.dll (at least version 3.1.6) in bin directory.
+Linux:
+>build.sh
+
+Must have SDL2.dll in the same directory as executable
 
 ## Licenses
 
-[CPixelSketch]() © 2024 by [Víctor López Cortés](https://github.com/victor-Lopez25) is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
+[PixelSketch]() © 2024 by [Víctor López Cortés](https://github.com/victor-Lopez25) is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)

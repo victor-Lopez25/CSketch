@@ -1,14 +1,5 @@
 #!/bin/bash
-sdllibpath=path/to/sdl/lib/x64/
-sdlincludepath=path/to/sdl/include/
-out=pixel_sketch.exe
-cpath=../src
-csrc=$cpath/main.c
 
-if [! -d bin] then
-  mkdir bin
-fi
+opts=-no-bounds-check -debug -vet -vet-using-param -vet-style
 
-cd bin
-gcc %csrc% -o%out% -Wall -Wextra -I%sdlincludepath% -L%sdllibpath% -l SDL3
-cd ..
+odin run $PWD $opts
