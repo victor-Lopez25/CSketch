@@ -384,35 +384,7 @@ RenderFromBitmap :: proc(editor: ^EditorData)
 	}
 }
 
-EditorInitAll :: proc(editor: ^EditorData)
-{
-	editor.windowWidth  = 1920*0.75;
-	editor.windowHeight = 1080*0.75;
-	//sdl.SetHint("SDL_MOUSE_RELATIVE_SYSTEM_SCALE", "1");
-	scc(sdl.Init(sdl.INIT_VIDEO));
-	editor.window = sdl.CreateWindow("Odin px paint", 40, 60, 
-																	 editor.windowWidth, editor.windowHeight, 
-																	 sdl.WINDOW_RESIZABLE);
-	assert(editor.window != nil, "Could not create window");
-	
-	editor.renderer = sdl.CreateRenderer(editor.window, -1, sdl.RENDERER_ACCELERATED);
-	assert(editor.renderer != nil, "Could not create renderer");
-	
-	editor.gridScale = 30;
-	editor.penSize = 3;
-	
-	editor.dstRect = {
-		editor.gridScale*6, editor.gridScale*4,// editor.gridScale/2, editor.gridScale/2,
-		editor.windowWidth, editor.windowHeight,
-	}
-	
-	editor.drawColor.r = 00;
-	editor.drawColor.g = 86;
-	editor.drawColor.b = 86;
-	editor.drawColor.a = 255;
-}
-
-main :: proc()
+EditorInitAll :: proc() -> ^EditorData
 {
 	editor := new(EditorData);
 	if len(os.args) != 1 {
@@ -465,13 +437,44 @@ main :: proc()
 		}
 	}
 	
-	EditorInitAll(editor);
 	if editor.bitmap.bytes == nil {
 		editor.bitmapCapacity = 1024*1024;
 		editor.bitmap = MakeEmptyBitmap(editor.bitmapCapacity);
 		editor.bitmap.width = 24;
 		editor.bitmap.height = 18;
 	}
+	
+	editor.windowWidth  = 1920*0.75;
+	editor.windowHeight = 1080*0.75;
+	//sdl.SetHint("SDL_MOUSE_RELATIVE_SYSTEM_SCALE", "1");
+	scc(sdl.Init(sdl.INIT_VIDEO));
+	editor.window = sdl.CreateWindow("Odin px paint", 40, 60, 
+																	 editor.windowWidth, editor.windowHeight, 
+																	 sdl.WINDOW_RESIZABLE);
+	assert(editor.window != nil, "Could not create window");
+	
+	editor.renderer = sdl.CreateRenderer(editor.window, -1, sdl.RENDERER_ACCELERATED);
+	assert(editor.renderer != nil, "Could not create renderer");
+	
+	editor.gridScale = 30;
+	editor.penSize = 3;
+	
+	editor.dstRect = {
+		editor.gridScale*6, editor.gridScale*4,// editor.gridScale/2, editor.gridScale/2,
+		editor.windowWidth, editor.windowHeight,
+	}
+	
+	editor.drawColor.r = 00;
+	editor.drawColor.g = 86;
+	editor.drawColor.b = 86;
+	editor.drawColor.a = 255;
+	
+	return editor;
+}
+
+main :: proc()
+{
+	editor := EditorInitAll();
 	
 	frameInput : Input;
 	
