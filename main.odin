@@ -1,13 +1,13 @@
 package editor
 
 import sdl "vendor:sdl2"
+import "base:runtime"
 import "core:os"
 import "core:c"
 import "core:fmt"
 import "core:time"
 import "core:mem"
 import "core:math"
-import "core:strings"
 
 /* DISCLAIMER:
 This doesn't do what I want it to do yet!
@@ -384,9 +384,8 @@ RenderFromBitmap :: proc(editor: ^EditorData)
 	}
 }
 
-EditorInitAll :: proc() -> ^EditorData
+EditorInitAll :: proc(editor: ^EditorData)
 {
-	editor := new(EditorData);
 	editor.windowWidth  = 1920*0.75;
 	editor.windowHeight = 1080*0.75;
 	//sdl.SetHint("SDL_MOUSE_RELATIVE_SYSTEM_SCALE", "1");
@@ -411,24 +410,67 @@ EditorInitAll :: proc() -> ^EditorData
 	editor.drawColor.g = 86;
 	editor.drawColor.b = 86;
 	editor.drawColor.a = 255;
-	
-	return editor;
 }
 
 main :: proc()
 {
-	// TODO: load rooms onto texture
-	editor := EditorInitAll();
-	if len(os.args) == 1 {
+	editor := new(EditorData);
+	if len(os.args) != 1 {
+		for idx := 1; idx < len(os.args); idx += 1
+		{
+			arg := os.args[idx];
+			if arg[0] == '-' {
+				// flag
+				arg = arg[1:];
+				if arg[0] == '-' {
+					// verbose flags
+					arg = arg[1:];
+					if arg == "help" {
+						fmt.printfln("Usage: %s <file>.bmp", os.args[0]);
+						os.exit(0);
+					}
+					else {
+						fmt.printfln("Ignoring unknown flag '%s'", arg);
+					}
+				}
+				else {
+					if arg == "h" || arg == "?" {
+						fmt.printfln("Usage: %s <file>.bmp", os.args[0]);
+						os.exit(0);
+					}
+					else {
+						fmt.printfln("Ignoring unknown flag '%s'", arg);
+					}
+				}
+			}
+			else if arg[0] == '/' {
+				if arg[1:] == "?" {
+					// windows style '/?'
+					fmt.printfln("Usage: %s <file>.bmp", os.args[0]);
+					os.exit(0);
+				}
+				else {
+					fmt.printfln("Ignoring unknown flag '%s'", arg);
+				}
+			}
+			else {
+				if os.is_file(arg) {
+					// try to open as bmp
+					LoadFromFile(editor, runtime.args__[idx]);
+				}
+				else {
+					fmt.printfln("File '%s' doesn't exist or isn't a file", arg);
+				}
+			}
+		}
+	}
+	
+	EditorInitAll(editor);
+	if editor.bitmap.bytes == nil {
 		editor.bitmapCapacity = 1024*1024;
 		editor.bitmap = MakeEmptyBitmap(editor.bitmapCapacity);
 		editor.bitmap.width = 24;
 		editor.bitmap.height = 18;
-	}
-	else {
-		loadFileName := strings.clone_to_cstring(os.args[1]);
-		LoadFromFile(editor, loadFileName);
-		delete(loadFileName);
 	}
 	
 	frameInput : Input;
