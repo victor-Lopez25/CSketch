@@ -45,7 +45,7 @@ i32_rect :: sdl.Rect
 
 // sdl.SaveBMP() saves to argb for some reason
 Color :: struct {
-	b, g, r, a: u8,
+	r, g, b, a: u8,
 }
 
 Button :: struct {
@@ -199,7 +199,13 @@ LoadFromFile :: proc(editor: ^EditorData, fileName: cstring)
 		editor.bitmapCapacity = int(loadSurface.w*loadSurface.h);
 		
 		// NOTE: If px format is not rgba32, change it so it is
-		convertedSurface := sdl.ConvertSurfaceFormat(loadSurface, u32(sdl.PixelFormatEnum.RGBA32), 0);
+		when ODIN_ENDIAN == .Little {
+			format := u32(sdl.PixelFormatEnum.RGBA32);
+		}
+		else {
+			format := u32(sdl.PixelFormatEnum.ABGR32);
+		}
+		convertedSurface := sdl.ConvertSurfaceFormat(loadSurface, format, 0);
 		
 		// NOTE: SDL_LoadBMP calls into SDL_CreateSurface which uses SDL_aligned_alloc
     // which probably works differently from SDL_malloc/realloc
