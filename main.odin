@@ -2,12 +2,13 @@ package editor
 
 import sdl "vendor:sdl2"
 import "base:runtime"
+import "core:strings"
+import "core:time"
+import "core:math"
+import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:c"
-import "core:fmt"
-import "core:time"
-import "core:mem"
-import "core:math"
 
 /* DISCLAIMER:
 This doesn't do what I want it to do yet!
@@ -44,10 +45,7 @@ i32_rect :: sdl.Rect
 
 // sdl.SaveBMP() saves to argb for some reason
 Color :: struct {
-	b: u8,
-	g: u8,
-	r: u8,
-	a: u8,
+	b, g, r, a: u8,
 }
 
 Button :: struct {
@@ -200,20 +198,18 @@ LoadFromFile :: proc(editor: ^EditorData, fileName: cstring)
 		editor.bitmap.height = loadSurface.h;
 		editor.bitmapCapacity = int(loadSurface.w*loadSurface.h);
 		
-		//fmt.println(loadSurface.format);
-		assert(loadSurface.format.Ashift == 24 && loadSurface.format.Rshift == 16 &&
-					 loadSurface.format.Gshift == 8 && loadSurface.format.Bshift == 0,
-					 "Different formats to argb are not supported for now");
+		// NOTE: If px format is not rgba32, change it so it is
+		convertedSurface := sdl.ConvertSurfaceFormat(loadSurface, u32(sdl.PixelFormatEnum.RGBA32), 0);
 		
 		// NOTE: SDL_LoadBMP calls into SDL_CreateSurface which uses SDL_aligned_alloc
     // which probably works differently from SDL_malloc/realloc
 		bmpSize := editor.bitmapCapacity;
-		// TODO: If px format is not rgba32, change it so it is
 		editor.bitmap.bytes = make([]u32, bmpSize);
 		mem.copy_non_overlapping(raw_data(editor.bitmap.bytes), 
-														 loadSurface.pixels, bmpSize*size_of(editor.bitmap.bytes[0]));
+														 convertedSurface.pixels, bmpSize*size_of(editor.bitmap.bytes[0]));
 		
 		sdl.FreeSurface(loadSurface);
+		sdl.FreeSurface(convertedSurface);
 	}
 }
 
@@ -384,9 +380,66 @@ RenderFromBitmap :: proc(editor: ^EditorData)
 	}
 }
 
+@(require_results)
+is_number :: proc(c : u8) -> bool {
+	return c >= '0' && c <= '9';
+}
+
+// n is the place the last digit was in the string
+// if I do need a function which does this with any base
+// just go to Odin strconv.parse_i64_maybe_prefixed and delete last 2 lines
+@(require_results)
+parse_int_prefix :: proc(str : string) -> (val : int = 0, n : int = 0, ok : bool = false)
+{
+	i := 0;
+	sign : int = 1;
+	
+	if str[0] == '-' {
+		if len(str) < 2 {
+			return;
+		}
+		
+		i += 1;
+		sign = -1;
+	}
+	if str[0] == '+' {
+		if len(str) < 2 {
+			return;
+		}
+		i += 1;
+	}
+	
+	if !is_number(str[i]) {
+		return;
+	}
+	
+	for ; i < len(str); i += 1
+	{
+		if !is_number(str[i]) do break;
+		
+		val *= 10;
+		val += int(str[i] - '0');
+	}
+	val *= sign;
+	n = i;
+	ok = true;
+	return;
+}
+
+Usage :: proc()
+{
+	fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
+	fmt.print("Flags:\n",
+						"-h | --help: Show usage and flags\n",
+						"-s:w,h | --size:w,h: Set initial width and height. Ignored if image file gets loaded\n");
+	os.exit(0);
+}
+
 EditorInitAll :: proc() -> ^EditorData
 {
 	editor := new(EditorData);
+	width : i32 = 24;
+	height : i32 = 18;
 	if len(os.args) != 1 {
 		for idx := 1; idx < len(os.args); idx += 1
 		{
@@ -398,8 +451,28 @@ EditorInitAll :: proc() -> ^EditorData
 					// verbose flags
 					arg = arg[1:];
 					if arg == "help" {
-						fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
-						os.exit(0);
+						Usage();
+					}
+					else if strings.has_prefix(arg, "size:") {
+						arg = arg[len("size:"):];
+						temp, n, ok := parse_int_prefix(arg);
+						if !ok {
+							fmt.printfln("Could not parse requested width: %s", arg);
+						}
+						else {
+							width = i32(temp);
+							arg = strings.trim_space(arg[n:]);
+							if arg[0] == 'x' || arg[0] == ',' {
+								arg = strings.trim_space(arg[1:]);
+							}
+							temp, n, ok = parse_int_prefix(arg);
+							if !ok {
+								fmt.printfln("Could not parse requested height: %s", arg);
+							}
+							else {
+								height = i32(temp);
+							}
+						}
 					}
 					else {
 						fmt.printfln("Ignoring unknown flag '%s'", arg);
@@ -407,8 +480,28 @@ EditorInitAll :: proc() -> ^EditorData
 				}
 				else {
 					if arg == "h" || arg == "?" {
-						fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
-						os.exit(0);
+						Usage();
+					}
+					else if strings.has_prefix(arg, "s:") {
+						arg = arg[len("s:"):];
+						temp, n, ok := parse_int_prefix(arg);
+						if !ok {
+							fmt.printfln("Could not parse requested width: %s", arg);
+						}
+						else {
+							width = i32(temp);
+							arg = strings.trim_space(arg[n:]);
+							if arg[0] == 'x' || arg[0] == ',' {
+								arg = strings.trim_space(arg[1:]);
+							}
+							temp, n, ok = parse_int_prefix(arg);
+							if !ok {
+								fmt.printfln("Could not parse requested height: %s", arg);
+							}
+							else {
+								height = i32(temp);
+							}
+						}
 					}
 					else {
 						fmt.printfln("Ignoring unknown flag '%s'", arg);
@@ -418,8 +511,7 @@ EditorInitAll :: proc() -> ^EditorData
 			else if arg[0] == '/' {
 				if arg[1:] == "?" {
 					// windows style '/?'
-					fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
-					os.exit(0);
+					Usage();
 				}
 				else {
 					fmt.printfln("Ignoring unknown flag '%s'", arg);
@@ -440,8 +532,8 @@ EditorInitAll :: proc() -> ^EditorData
 	if editor.bitmap.bytes == nil {
 		editor.bitmapCapacity = 1024*1024;
 		editor.bitmap = MakeEmptyBitmap(editor.bitmapCapacity);
-		editor.bitmap.width = 24;
-		editor.bitmap.height = 18;
+		editor.bitmap.width = width;
+		editor.bitmap.height = height;
 	}
 	
 	editor.windowWidth  = 1920*0.75;
