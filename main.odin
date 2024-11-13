@@ -7,6 +7,7 @@ import "core:fmt"
 import "core:time"
 import "core:mem"
 import "core:math"
+import "core:strings"
 
 /* DISCLAIMER:
 This doesn't do what I want it to do yet!
@@ -40,6 +41,14 @@ Key :: sdl.Keycode
 v2 :: sdl.FPoint
 v2i :: sdl.Point
 i32_rect :: sdl.Rect
+
+// sdl.SaveBMP() saves to argb for some reason
+Color :: struct {
+	b: u8,
+	g: u8,
+	r: u8,
+	a: u8,
+}
 
 Button :: struct {
 	down:      b32,
@@ -83,7 +92,7 @@ EditorData :: struct {
 	windowHeight: i32,
 	quit: b32,
 	
-	drawColor: sdl.Color,
+	drawColor: Color,
 	
 	gridScale: i32,
 	penSize: i32,
@@ -166,9 +175,46 @@ MakeEmptyBitmap :: proc(cap: int) -> Bitmap
 	return bitmap;
 }
 
-SaveToFile :: proc(editor: ^EditorData, fileName: string)
+SaveToFile :: proc(editor: ^EditorData, fileName: cstring)
 {
-	assert(false, "unimplemented");
+	saveSurface := 
+		sdl.CreateRGBSurfaceWithFormat(0, 0, 0, 32, u32(sdl.PixelFormatEnum.RGBA32));
+	saveSurface.w = editor.bitmap.width;
+	saveSurface.h = editor.bitmap.height;
+	saveSurface.pitch = editor.bitmap.width*size_of(editor.bitmap.bytes[0]);
+	saveSurface.pixels = raw_data(editor.bitmap.bytes);
+	
+	scc(sdl.SaveBMP(saveSurface, fileName));
+}
+
+LoadFromFile :: proc(editor: ^EditorData, fileName: cstring)
+{
+	loadSurface := sdl.LoadBMP(fileName);
+	if(loadSurface != nil) {
+		if(editor.bitmap.bytes != nil) {
+			// TODO: Save dialog here since we're overwriting?
+			delete(editor.bitmap.bytes);
+		}
+		
+		editor.bitmap.width = loadSurface.w;
+		editor.bitmap.height = loadSurface.h;
+		editor.bitmapCapacity = int(loadSurface.w*loadSurface.h);
+		
+		//fmt.println(loadSurface.format);
+		assert(loadSurface.format.Ashift == 24 && loadSurface.format.Rshift == 16 &&
+					 loadSurface.format.Gshift == 8 && loadSurface.format.Bshift == 0,
+					 "Different formats to argb are not supported for now");
+		
+		// NOTE: SDL_LoadBMP calls into SDL_CreateSurface which uses SDL_aligned_alloc
+    // which probably works differently from SDL_malloc/realloc
+		bmpSize := editor.bitmapCapacity;
+		// TODO: If px format is not rgba32, change it so it is
+		editor.bitmap.bytes = make([]u32, bmpSize);
+		mem.copy_non_overlapping(raw_data(editor.bitmap.bytes), 
+														 loadSurface.pixels, bmpSize*size_of(editor.bitmap.bytes[0]));
+		
+		sdl.FreeSurface(loadSurface);
+	}
 }
 
 // oldSize must be in bytes, newSize in u32s
@@ -274,7 +320,7 @@ ExpandMap :: proc(editor: ^EditorData, rect: ^i32_rect)
 	}
 }
 
-CPUFillRect :: proc(bitmap: ^Bitmap, rect: i32_rect, c: sdl.Color)
+CPUFillRect :: proc(bitmap: ^Bitmap, rect: i32_rect, c: Color)
 {
 	rect := rect;
 	
@@ -325,7 +371,7 @@ RenderFromBitmap :: proc(editor: ^EditorData)
 	{
 		for x : i32 = xIni; x < xEnd; x += 1
 		{
-			px := transmute(sdl.Color)bitmap.bytes[y*bitmap.width + x];
+			px := transmute(Color)bitmap.bytes[y*bitmap.width + x];
 			
 			rect = {
 				x*pxSize + editor.dstRect.x, y*pxSize + editor.dstRect.y,
@@ -373,12 +419,21 @@ main :: proc()
 {
 	// TODO: load rooms onto texture
 	editor := EditorInitAll();
-	editor.bitmapCapacity = 1024*1024;
-	editor.bitmap = MakeEmptyBitmap(editor.bitmapCapacity);
-	editor.bitmap.width = 24;
-	editor.bitmap.height = 18;
+	if len(os.args) == 1 {
+		editor.bitmapCapacity = 1024*1024;
+		editor.bitmap = MakeEmptyBitmap(editor.bitmapCapacity);
+		editor.bitmap.width = 24;
+		editor.bitmap.height = 18;
+	}
+	else {
+		loadFileName := strings.clone_to_cstring(os.args[1]);
+		LoadFromFile(editor, loadFileName);
+		delete(loadFileName);
+	}
 	
 	frameInput : Input;
+	
+	fileName : cstring = "sketch.bmp";
 	
 	TargetFPS : f32 = 60.0;
 	deltaTime : f32 = 0; // in seconds
@@ -433,6 +488,12 @@ main :: proc()
 		case Key.RCTRL: {
 			frameInput.ctrl.down = false;
 			frameInput.ctrl.up = true;
+		}
+		
+		case Key.s: {
+			if(frameInput.ctrl.down) {
+				SaveToFile(editor, fileName);
+			}
 		}
 	}
 }
