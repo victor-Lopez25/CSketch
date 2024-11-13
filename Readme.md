@@ -4,7 +4,7 @@ Sketch program made in Odin with SDL2
 
 WARNING: This is not complete yet!
 
-Command line usage: PixelSketch.exe <file>.bmp
+Command line usage: `PixelSketch.exe [file.bmp]`
 
 ## Dependencies
 
