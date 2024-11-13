@@ -43,11 +43,6 @@ v2 :: sdl.FPoint
 v2i :: sdl.Point
 i32_rect :: sdl.Rect
 
-// sdl.SaveBMP() saves to argb for some reason
-Color :: struct {
-	r, g, b, a: u8,
-}
-
 Button :: struct {
 	down:      b32,
 	up:        b32,
@@ -90,7 +85,7 @@ EditorData :: struct {
 	windowHeight: i32,
 	quit: b32,
 	
-	drawColor: Color,
+	drawColor: sdl.Color,
 	
 	gridScale: i32,
 	penSize: i32,
@@ -322,7 +317,7 @@ ExpandMap :: proc(editor: ^EditorData, rect: ^i32_rect)
 	}
 }
 
-CPUFillRect :: proc(bitmap: ^Bitmap, rect: i32_rect, c: Color)
+CPUFillRect :: proc(bitmap: ^Bitmap, rect: i32_rect, c: sdl.Color)
 {
 	rect := rect;
 	
@@ -373,7 +368,7 @@ RenderFromBitmap :: proc(editor: ^EditorData)
 	{
 		for x : i32 = xIni; x < xEnd; x += 1
 		{
-			px := transmute(Color)bitmap.bytes[y*bitmap.width + x];
+			px := transmute(sdl.Color)bitmap.bytes[y*bitmap.width + x];
 			
 			rect = {
 				x*pxSize + editor.dstRect.x, y*pxSize + editor.dstRect.y,
