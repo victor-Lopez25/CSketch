@@ -426,7 +426,7 @@ main :: proc()
 					// verbose flags
 					arg = arg[1:];
 					if arg == "help" {
-						fmt.printfln("Usage: %s <file>.bmp", os.args[0]);
+						fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
 						os.exit(0);
 					}
 					else {
@@ -435,7 +435,7 @@ main :: proc()
 				}
 				else {
 					if arg == "h" || arg == "?" {
-						fmt.printfln("Usage: %s <file>.bmp", os.args[0]);
+						fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
 						os.exit(0);
 					}
 					else {
@@ -446,7 +446,7 @@ main :: proc()
 			else if arg[0] == '/' {
 				if arg[1:] == "?" {
 					// windows style '/?'
-					fmt.printfln("Usage: %s <file>.bmp", os.args[0]);
+					fmt.printfln("Usage: %s [file.bmp]", os.args[0]);
 					os.exit(0);
 				}
 				else {
