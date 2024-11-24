@@ -8,7 +8,8 @@ Command line usage: `PixelSketch.exe [file.bmp]`
 
 ## Dependencies
 
-- SDL2
+- [SDL2](https://wiki.libsdl.org/SDL2/FrontPage)
+- [microui (Rxi)](https://github.com/rxi/microui)
 
 ## Building
 

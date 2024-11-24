@@ -1,10 +1,11 @@
 package editor
 
 import sdl "vendor:sdl2"
+import mu "vendor:microui"
+
 import "base:runtime"
 import "core:strings"
 import "core:time"
-import "core:math"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -13,6 +14,9 @@ import "core:c"
 /* DISCLAIMER:
 This doesn't do what I want it to do yet!
 */
+
+// example code for microui + sdl + odin:
+//https://github.com/odin-lang/examples/blob/master/sdl2/microui/microui_sdl_demo.odin
 
 /* TODO:
 [x] Handle window resizing
@@ -24,6 +28,9 @@ This doesn't do what I want it to do yet!
 [ ] Draw Lines instead of dots? -> 
   .  this requires doing something different from sdl.RenderDrawLines 
 .  since it doesn't take line thickness -> it doesn't, it needs sdl.RenderSetScale
+
+[x] basic UI
+[ ] an actual color picker
 [ ] 
 */
 
@@ -60,6 +67,7 @@ Input :: struct {
 	prevMousePos: v2i,
 	
 	timestamp: u32,
+	//text: [sdl.TEXTINPUTEVENT_TEXT_SIZE]u8,
 }
 
 InitInputForFrame :: proc "contextless" (input : ^Input)
@@ -81,10 +89,13 @@ Bitmap :: struct {
 EditorData :: struct {
 	window: ^sdl.Window,
 	renderer: ^sdl.Renderer,
+	atlasTexture: ^sdl.Texture,
+	uiContext: mu.Context,
 	windowWidth: i32,
 	windowHeight: i32,
 	quit: b32,
 	
+	bg: mu.Color,
 	drawColor: sdl.Color,
 	
 	gridScale: i32,
@@ -92,9 +103,14 @@ EditorData :: struct {
 	
 	bitmap: Bitmap,
 	bitmapCapacity: int, // in pixels
+	
 	allowBmpResize: b32,
+	committed: b32,
+	drawUncommitted: b32,
 	
 	dstRect: i32_rect,
+	commitRect: i32_rect,
+	uncommitRect: i32_rect,
 }
 
 DrawGrid :: proc "contextless" (editor: ^EditorData)
@@ -115,11 +131,11 @@ DrawGrid :: proc "contextless" (editor: ^EditorData)
 	}
 }
 
-DrawBitmapBounds :: proc(editor: ^EditorData)
+DrawBitmapBounds :: proc "contextless"(editor: ^EditorData)
 {
 	if editor.bitmap.width > 0 && editor.bitmap.height > 0 {
 		thickness : i32 = 2;
-		scc(sdl.RenderSetScale(editor.renderer, f32(thickness), f32(thickness)));
+		sdl.RenderSetScale(editor.renderer, f32(thickness), f32(thickness));
 		
 		xIni := editor.dstRect.x/thickness;
 		yIni := editor.dstRect.y/thickness;
@@ -139,7 +155,7 @@ DrawBitmapBounds :: proc(editor: ^EditorData)
 			sdl.RenderDrawLine(editor.renderer, xIni, yEnd, xEnd, yEnd);
 		}
 		
-		scc(sdl.RenderSetScale(editor.renderer, 1, 1));
+		sdl.RenderSetScale(editor.renderer, 1, 1);
 	}
 }
 
@@ -317,7 +333,7 @@ ExpandMap :: proc(editor: ^EditorData, rect: ^i32_rect)
 	}
 }
 
-CPUFillRect :: proc(bitmap: ^Bitmap, rect: i32_rect, c: sdl.Color)
+CPUFillRect :: proc "contextless"(bitmap: ^Bitmap, rect: i32_rect, c: sdl.Color)
 {
 	rect := rect;
 	
@@ -350,7 +366,7 @@ CPUFillRect :: proc(bitmap: ^Bitmap, rect: i32_rect, c: sdl.Color)
 	}
 }
 
-RenderFromBitmap :: proc(editor: ^EditorData)
+RenderFromBitmap :: proc "contextless"(editor: ^EditorData)
 {
 	bitmap := &editor.bitmap;
 	pxSize := editor.gridScale;
@@ -375,8 +391,8 @@ RenderFromBitmap :: proc(editor: ^EditorData)
 				pxSize, pxSize,
 			}
 			
-			scc(sdl.SetRenderDrawColor(editor.renderer, px.r, px.g, px.b, px.a));
-			scc(sdl.RenderFillRect(editor.renderer, &rect));
+			sdl.SetRenderDrawColor(editor.renderer, px.r, px.g, px.b, px.a);
+			sdl.RenderFillRect(editor.renderer, &rect);
 		}
 	}
 }
@@ -543,17 +559,84 @@ EditorInitAll :: proc() -> ^EditorData
 	scc(sdl.Init(sdl.INIT_VIDEO));
 	editor.window = sdl.CreateWindow("Odin px paint", 40, 60, 
 																	 editor.windowWidth, editor.windowHeight, 
-																	 sdl.WINDOW_RESIZABLE);
+																	 {.SHOWN, .RESIZABLE});
 	assert(editor.window != nil, "Could not create window");
 	
-	editor.renderer = sdl.CreateRenderer(editor.window, -1, sdl.RENDERER_ACCELERATED);
+	backend_idx: i32 = -1;
+	if n := sdl.GetNumRenderDrivers(); n <= 0 {
+		fmt.eprintln("No render drivers available");
+	}
+	else {
+		for i : i32 = 0; i < n; i += 1
+		{
+			info: sdl.RendererInfo;
+			if err := sdl.GetRenderDriverInfo(i, &info); err == 0 {
+				// NOTE(bill): "direct3d" seems to not work correctly
+				if info.name == "opengl" {
+					backend_idx = i;
+					break;
+				}
+			}
+		}
+	}
+	
+	editor.renderer = sdl.CreateRenderer(editor.window, backend_idx, sdl.RENDERER_ACCELERATED);
 	assert(editor.renderer != nil, "Could not create renderer");
+	
+	editor.atlasTexture = sdl.CreateTexture(editor.renderer, .RGBA32, .TARGET, 
+																					mu.DEFAULT_ATLAS_WIDTH, mu.DEFAULT_ATLAS_HEIGHT);
+	assert(editor.atlasTexture != nil, "Could not create ui atlas texture");
+	if err := sdl.SetTextureBlendMode(editor.atlasTexture, .BLEND); err != 0 {
+		fmt.eprintln("sdl.SetTextureBlendMode:", err);
+		os.exit(1);
+	}
+	
+	pixels := make([][4]u8, mu.DEFAULT_ATLAS_WIDTH*mu.DEFAULT_ATLAS_HEIGHT);
+	defer delete(pixels);
+	for alpha, i in mu.default_atlas_alpha {
+		pixels[i].rgb = 0xff;
+		pixels[i].a   = alpha;
+	}
+	
+	if err := sdl.UpdateTexture(editor.atlasTexture, nil, raw_data(pixels), 4*mu.DEFAULT_ATLAS_WIDTH); err != 0 {
+		fmt.eprintln("sdl.UpdateTexture:", err);
+		os.exit(1);
+	}
+	
+	mu.init(&editor.uiContext,
+					set_clipboard = proc(user_data: rawptr, text: string) -> (ok: bool) {
+						cstr := strings.clone_to_cstring(text);
+						sdl.SetClipboardText(cstr);
+						delete(cstr);
+						return true;
+					},
+					get_clipboard = proc(user_data: rawptr) -> (text: string, ok: bool) {
+						if sdl.HasClipboardText() {
+							text = string(sdl.GetClipboardText());
+							ok = true;
+						}
+						return;
+					},
+					);
+	
+	editor.uiContext.text_width = mu.default_atlas_text_width;
+	editor.uiContext.text_height = mu.default_atlas_text_height;
+	
+	sdl.AddEventWatch(proc "c"(data: rawptr, event: ^sdl.Event) -> c.int {
+											if event.type == .WINDOWEVENT && event.window.event == .RESIZED {
+												editor := (^EditorData)(data);
+												editor.windowWidth = event.window.data1;
+												editor.windowHeight = event.window.data2;
+												render(editor);
+											}
+											return 0;
+										}, editor);
 	
 	editor.gridScale = 30;
 	editor.penSize = 3;
 	
 	editor.dstRect = {
-		editor.gridScale*6, editor.gridScale*4,// editor.gridScale/2, editor.gridScale/2,
+		(editor.windowWidth)/4, (editor.windowHeight)/5,
 		editor.windowWidth, editor.windowHeight,
 	}
 	
@@ -565,11 +648,168 @@ EditorInitAll :: proc() -> ^EditorData
 	return editor;
 }
 
+render :: proc "contextless"(editor: ^EditorData)
+{
+	// only push committed graphics onto cpu bitmap
+	if editor.committed {
+		CPUFillRect(&editor.bitmap, editor.commitRect, editor.drawColor);
+	}
+	
+	viewport_rect := &sdl.Rect{};
+	sdl.GetRendererOutputSize(editor.renderer, &viewport_rect.w, &viewport_rect.h);
+	sdl.RenderSetViewport(editor.renderer, viewport_rect);
+	sdl.RenderSetClipRect(editor.renderer, viewport_rect);
+	sdl.SetRenderDrawColor(editor.renderer, editor.bg.r, editor.bg.g, editor.bg.b, editor.bg.a);
+	sdl.RenderClear(editor.renderer);
+	
+	RenderFromBitmap(editor);
+	// draw uncommitted graphics here
+	if editor.drawUncommitted {
+		sdl.SetRenderDrawColor(editor.renderer, 
+													 editor.drawColor.r, editor.drawColor.g, editor.drawColor.b, editor.drawColor.a);
+		sdl.RenderFillRect(editor.renderer, &editor.uncommitRect);
+	}
+	
+	sdl.SetRenderDrawColor(editor.renderer, 86, 86, 0, 255);
+	DrawGrid(editor);
+	sdl.SetRenderDrawColor(editor.renderer, 255, 255, 255, 255);
+	DrawBitmapBounds(editor);
+	
+	////////////////////////////////
+	// Draw UI
+	////////////////////////////////
+	render_texture :: proc "contextless" (editor: ^EditorData, dst: ^sdl.Rect, src: mu.Rect, color: mu.Color) {
+		dst.w = src.w;
+		dst.h = src.h;
+		
+		sdl.SetTextureAlphaMod(editor.atlasTexture, color.a);
+		sdl.SetTextureColorMod(editor.atlasTexture, color.r, color.g, color.b);
+		sdl.RenderCopy(editor.renderer, editor.atlasTexture, &sdl.Rect{src.x, src.y, src.w, src.h}, dst);
+	}
+	
+	command_backing: ^mu.Command;
+	for variant in mu.next_command_iterator(&editor.uiContext, &command_backing) {
+		switch cmd in variant {
+			case ^mu.Command_Text: {
+				dst := sdl.Rect{cmd.pos.x, cmd.pos.y, 0, 0}
+				for ch in cmd.str {
+					if ch&0xc0 != 0x80 {
+						r := min(int(ch), 127)
+							src := mu.default_atlas[mu.DEFAULT_ATLAS_FONT + r]
+							render_texture(editor, &dst, src, cmd.color)
+							dst.x += dst.w
+					}
+				}
+			}
+			case ^mu.Command_Rect: {
+				sdl.SetRenderDrawColor(editor.renderer, cmd.color.r, cmd.color.g, cmd.color.b, cmd.color.a);
+				sdl.RenderFillRect(editor.renderer, &sdl.Rect{cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h});
+			}
+			case ^mu.Command_Icon: {
+				src := mu.default_atlas[cmd.id];
+				x := cmd.rect.x + (cmd.rect.w - src.w)/2;
+				y := cmd.rect.y + (cmd.rect.h - src.h)/2;
+				render_texture(editor, &sdl.Rect{x, y, 0, 0}, src, cmd.color);
+			}
+			case ^mu.Command_Clip: {
+				sdl.RenderSetClipRect(editor.renderer, &sdl.Rect{cmd.rect.x, cmd.rect.y, cmd.rect.w, cmd.rect.h});
+			}
+			case ^mu.Command_Jump: unreachable();
+		}
+	}
+	
+	sdl.RenderPresent(editor.renderer);
+}
+
+update :: proc(editor: ^EditorData, input: ^Input)
+{
+	editor.penSize = max(editor.penSize + input.scrollY, 1);
+	
+	if input.mmb.down {
+		editor.dstRect.x += input.mousePos.x - input.prevMousePos.x;
+		editor.dstRect.y += input.mousePos.y - input.prevMousePos.y;
+		
+		shouldWarpMouse : b32 = false;
+		if input.mousePos.x > editor.windowWidth {
+			input.mousePos.x = 0;
+			input.prevMousePos.x = 0;
+			shouldWarpMouse = true;
+		}
+		if input.mousePos.y > editor.windowHeight {
+			input.mousePos.y = 0;
+			input.prevMousePos.y = 0;
+			shouldWarpMouse = true;
+		}
+		if input.mousePos.x < 0 {
+			input.mousePos.x = editor.windowWidth;
+			input.prevMousePos.x = editor.windowWidth;
+			shouldWarpMouse = true;
+		}
+		if input.mousePos.y < 0 {
+			input.mousePos.y = editor.windowHeight;
+			input.prevMousePos.y = editor.windowHeight;
+			shouldWarpMouse = true;
+		}
+		
+		if shouldWarpMouse {
+			sdl.WarpMouseInWindow(editor.window, input.mousePos.x, input.mousePos.y);
+		}
+	}
+	
+	drawSize : i32 = editor.gridScale*editor.penSize;
+	
+	penGridPos := PenPosFromMouse(input.mousePos, 
+																{editor.dstRect.x, editor.dstRect.y}, 
+																editor.gridScale, drawSize);
+	
+	editor.commitRect = i32_rect{
+		penGridPos.x, penGridPos.y,
+		editor.penSize, editor.penSize,
+	}
+	
+	editor.uncommitRect = i32_rect{
+		penGridPos.x*editor.gridScale + editor.dstRect.x, 
+		penGridPos.y*editor.gridScale + editor.dstRect.y,
+		drawSize, drawSize,
+	}
+	
+	if input.lmb.up {
+		if editor.allowBmpResize {
+			ExpandMap(editor, &editor.commitRect);
+		}
+		editor.committed = true;
+	}
+	
+	editor.drawUncommitted = !input.mmb.down;
+}
+
 main :: proc()
 {
+	when ODIN_DEBUG {
+		track: mem.Tracking_Allocator;
+		mem.tracking_allocator_init(&track, context.allocator);
+		context.allocator = mem.tracking_allocator(&track);
+		
+		defer {
+			if len(track.allocation_map) > 0 {
+				fmt.eprintf("=== %v allocations not freed: ===\n", len(track.allocation_map));
+				for _, entry in track.allocation_map {
+					fmt.eprintf("- %v bytes @ %v\n", entry.size, entry.location);
+				}
+			}
+			if len(track.bad_free_array) > 0 {
+				fmt.eprintf("=== %v incorrect frees: ===\n", len(track.bad_free_array));
+				for entry in track.bad_free_array {
+					fmt.eprintf("- %p @ %v\n", entry.memory, entry.location);
+				}
+			}
+			mem.tracking_allocator_destroy(&track);
+		}
+	}
+	
 	editor := EditorInitAll();
 	
-	frameInput : Input;
+	frameInput: Input;
 	
 	fileName : cstring = "sketch.bmp";
 	
@@ -577,15 +817,21 @@ main :: proc()
 	deltaTime : f32 = 0; // in seconds
 	pause : b32 = false;
 	for !editor.quit {
+		free_all(context.temp_allocator);
 		startTick : time.Tick = time.tick_now();
 		InitInputForFrame(&frameInput);
 		
-		event : sdl.Event;
+		event: sdl.Event;
 		for sdl.PollEvent(&event)
 		{
 #partial switch event.type {
 			case Event.QUIT: {
 				editor.quit = true;
+			}
+			
+			case Event.TEXTINPUT: {
+				//mem.copy_non_overlapping(&frameInput.text[0], &event.text.text[0], sdl.TEXTINPUTEVENT_TEXT_SIZE);
+				mu.input_text(&editor.uiContext, string(cstring(&event.text.text[0])));
 			}
 			
 			case Event.WINDOWEVENT: {
@@ -598,55 +844,76 @@ main :: proc()
 			}
 		}
 		
-		case Event.KEYDOWN: {
+		case Event.KEYDOWN, Event.KEYUP: {
+			if event.type == Event.KEYDOWN {
 #partial switch event.key.keysym.sym {
-			case Key.p: {
-				pause = !pause;
+				case Key.p: {
+					pause = !pause;
+				}
+				
+				case Key.r: {
+					editor.allowBmpResize = !editor.allowBmpResize;
+				}
+				
+				case Key.LCTRL, Key.RCTRL: {
+					frameInput.ctrl.down = true;
+					frameInput.ctrl.timestamp = event.key.timestamp;
+				}
+			}
+		}
+		else { // keyup
+#partial switch event.key.keysym.sym {
+			case Key.s: {
+				if(frameInput.ctrl.down) {
+					SaveToFile(editor, fileName);
+				}
 			}
 			
-			case Key.r: {
-				editor.allowBmpResize = !editor.allowBmpResize;
-			}
-			
-			case Key.c: {
-				// TODO: Go to center of drawing
-			}
-			
-			case Key.LCTRL: fallthrough;
-			case Key.RCTRL: {
-				frameInput.ctrl.down = true;
-				frameInput.ctrl.timestamp = event.key.timestamp;
+			case Key.LCTRL, Key.RCTRL: {
+				frameInput.ctrl.down = false;
+				frameInput.ctrl.up = true;
 			}
 		}
 	}
 	
-	case Event.KEYUP: {
+	fn := mu.input_key_down if event.type == .KEYDOWN else mu.input_key_up;
+	
 #partial switch event.key.keysym.sym {
-		case Key.LCTRL: fallthrough;
-		case Key.RCTRL: {
-			frameInput.ctrl.down = false;
-			frameInput.ctrl.up = true;
-		}
-		
-		case Key.s: {
-			if(frameInput.ctrl.down) {
-				SaveToFile(editor, fileName);
-			}
-		}
-	}
+	case .LSHIFT:    fn(&editor.uiContext, .SHIFT);
+	case .RSHIFT:    fn(&editor.uiContext, .SHIFT);
+	case .LCTRL:     fn(&editor.uiContext, .CTRL);
+	case .RCTRL:     fn(&editor.uiContext, .CTRL);
+	case .LALT:      fn(&editor.uiContext, .ALT);
+	case .RALT:      fn(&editor.uiContext, .ALT);
+	case .RETURN:    fn(&editor.uiContext, .RETURN);
+	case .KP_ENTER:  fn(&editor.uiContext, .RETURN);
+	case .BACKSPACE: fn(&editor.uiContext, .BACKSPACE);
+	
+	case .LEFT:  fn(&editor.uiContext, .LEFT);
+	case .RIGHT: fn(&editor.uiContext, .RIGHT);
+	case .HOME:  fn(&editor.uiContext, .HOME);
+	case .END:   fn(&editor.uiContext, .END);
+	case .A:     fn(&editor.uiContext, .A);
+	case .X:     fn(&editor.uiContext, .X);
+	case .C:     fn(&editor.uiContext, .C);
+	case .V:     fn(&editor.uiContext, .V);
+}
 }
 
 case Event.MOUSEBUTTONDOWN: {
 	switch event.button.button {
 		case sdl.BUTTON_LEFT: {
+			mu.input_mouse_down(&editor.uiContext, event.button.x, event.button.y, .LEFT);
 			frameInput.lmb.down = true;
 			frameInput.lmb.timestamp = event.button.timestamp;
 		}
 		case sdl.BUTTON_MIDDLE: {
+			mu.input_mouse_down(&editor.uiContext, event.button.x, event.button.y, .MIDDLE);
 			frameInput.mmb.down = true;
 			frameInput.mmb.timestamp = event.button.timestamp;
 		}
 		case sdl.BUTTON_RIGHT: {
+			mu.input_mouse_down(&editor.uiContext, event.button.x, event.button.y, .RIGHT);
 			frameInput.rmb.down = true;
 			frameInput.rmb.timestamp = event.button.timestamp;
 		}
@@ -656,14 +923,17 @@ case Event.MOUSEBUTTONDOWN: {
 case Event.MOUSEBUTTONUP: {
 	switch event.button.button {
 		case sdl.BUTTON_LEFT: {
+			mu.input_mouse_up(&editor.uiContext, event.button.x, event.button.y, .LEFT);
 			frameInput.lmb.down = false;
 			frameInput.lmb.up = true;
 		}
 		case sdl.BUTTON_MIDDLE: {
+			mu.input_mouse_up(&editor.uiContext, event.button.x, event.button.y, .MIDDLE);
 			frameInput.mmb.down = false;
 			frameInput.mmb.up = true;
 		}
 		case sdl.BUTTON_RIGHT: {
+			mu.input_mouse_up(&editor.uiContext, event.button.x, event.button.y, .RIGHT);
 			frameInput.rmb.down = false;
 			frameInput.rmb.up = true;
 		}
@@ -672,6 +942,7 @@ case Event.MOUSEBUTTONUP: {
 
 case Event.MOUSEWHEEL: {
 	frameInput.scrollY = event.wheel.y;
+	mu.input_scroll(&editor.uiContext, event.wheel.x * 30, event.wheel.y * -30);
 }
 }
 }
@@ -679,103 +950,20 @@ case Event.MOUSEWHEEL: {
 // NOTE: This returns something that could be useful?
 sdl.GetMouseState(&frameInput.mousePos.x, &frameInput.mousePos.y);
 frameInput.timestamp = sdl.GetTicks();
+mu.input_mouse_move(&editor.uiContext, frameInput.mousePos.x, frameInput.mousePos.y);
 
 if !pause {
-	if frameInput.ctrl.down {
-		gval := u8(255.0*(1.0 + math.sin(f32(i32(frameInput.timestamp)*frameInput.scrollY)/37.0)));
-		editor.drawColor.g = u8(int(gval) + int(editor.drawColor.g) % 255);
-		
-		rval := u8(255.0*(1.0 + math.sin(f32(i32(frameInput.timestamp)*frameInput.scrollY)/71.0)));
-		editor.drawColor.r = u8(int(rval) + int(editor.drawColor.r) % 255);
-		
-	}
-	else {
-		editor.penSize = max(editor.penSize + frameInput.scrollY, 1);
-	}
+	update(editor, &frameInput);
 	
-	if frameInput.mmb.down {
-		editor.dstRect.x += frameInput.mousePos.x - frameInput.prevMousePos.x;
-		editor.dstRect.y += frameInput.mousePos.y - frameInput.prevMousePos.y;
-		
-		shouldWarpMouse : b32 = false;
-		if frameInput.mousePos.x > editor.windowWidth {
-			frameInput.mousePos.x = 0;
-			frameInput.prevMousePos.x = 0;
-			shouldWarpMouse = true;
-		}
-		if frameInput.mousePos.y > editor.windowHeight {
-			frameInput.mousePos.y = 0;
-			frameInput.prevMousePos.y = 0;
-			shouldWarpMouse = true;
-		}
-		if frameInput.mousePos.x < 0 {
-			frameInput.mousePos.x = editor.windowWidth;
-			frameInput.prevMousePos.x = editor.windowWidth;
-			shouldWarpMouse = true;
-		}
-		if frameInput.mousePos.y < 0 {
-			frameInput.mousePos.y = editor.windowHeight;
-			frameInput.prevMousePos.y = editor.windowHeight;
-			shouldWarpMouse = true;
-		}
-		
-		if shouldWarpMouse {
-			sdl.WarpMouseInWindow(editor.window, frameInput.mousePos.x, frameInput.mousePos.y);
-		}
-	}
+	mu.begin(&editor.uiContext);
+	ui_update(editor);
+	mu.end(&editor.uiContext);
 	
-	drawSize : i32 = editor.gridScale*editor.penSize;
-	
-	penGridPos := PenPosFromMouse(frameInput.mousePos, 
-																{editor.dstRect.x, editor.dstRect.y}, 
-																editor.gridScale, drawSize);
-	
-	commitRect := i32_rect{
-		penGridPos.x, penGridPos.y,
-		editor.penSize, editor.penSize,
-	}
-	
-	uncommitRect := i32_rect{
-		penGridPos.x*editor.gridScale + editor.dstRect.x, 
-		penGridPos.y*editor.gridScale + editor.dstRect.y,
-		drawSize, drawSize,
-	}
-	
-	////////////////////////////////
-	// Render
-	////////////////////////////////
-	// only push committed graphics onto cpu bitmap
-	
-	if frameInput.lmb.up {
-		if editor.allowBmpResize {
-			ExpandMap(editor, &commitRect);
-		}
-		CPUFillRect(&editor.bitmap, commitRect, editor.drawColor);
-	}
-	
-	//sdl.RenderPresent(editor.renderer);
-	//scc(sdl.SetRenderTarget(editor.renderer, nil));
-	scc(sdl.SetRenderDrawColor(editor.renderer, 0, 0, 0, 255));
-	scc(sdl.RenderClear(editor.renderer));
-	//sdl.RenderCopy(editor.renderer, texture, nil, &destRect);
-	RenderFromBitmap(editor);
-	
-	// draw uncommitted graphics here
-	if !frameInput.mmb.down {
-		scc(sdl.SetRenderDrawColor(editor.renderer, 
-															 editor.drawColor.r, editor.drawColor.g, editor.drawColor.b, editor.drawColor.a));
-		scc(sdl.RenderFillRect(editor.renderer, &uncommitRect));
-	}
-	
-	scc(sdl.SetRenderDrawColor(editor.renderer, 86, 86, 0, 255));
-	DrawGrid(editor);
-	scc(sdl.SetRenderDrawColor(editor.renderer, 255, 255, 255, 255));
-	DrawBitmapBounds(editor);
-	
-	sdl.RenderPresent(editor.renderer);
+	render(editor);
 }
 
 frameInput.prevMousePos = frameInput.mousePos;
+editor.committed = false;
 
 ////////////////////////////////
 // end frame
@@ -795,5 +983,70 @@ deltaTime = f32(time.duration_seconds(duration));
 //fmt.printf("frame time: %f\n", deltaTime*1000.0);
 }
 
+delete(editor.bitmap.bytes);
+sdl.DestroyWindow(editor.window);
+sdl.DestroyRenderer(editor.renderer);
+free(editor);
 sdl.Quit();
+}
+
+u8_slider :: proc(ctx: ^mu.Context, val: ^u8, lo, hi: u8) -> (res: mu.Result_Set)
+{
+	mu.push_id(ctx, uintptr(val));
+	
+	@static tmp: mu.Real;
+	tmp = mu.Real(val^);
+	res = mu.slider(ctx, &tmp, mu.Real(lo), mu.Real(hi), 0, "%.0f", {.ALIGN_CENTER});
+	val^ = u8(tmp);
+	mu.pop_id(ctx);
+	return;
+}
+
+ui_update :: proc(editor: ^EditorData) {
+	opts := mu.Options{.NO_CLOSE, .NO_SCROLL, .NO_RESIZE}
+	
+	ctx := &editor.uiContext;
+	
+	if mu.window(ctx, "Demo Window", {40, 260, 200, 224}, opts) {
+		win := mu.get_current_container(ctx);
+		winRect := mu.Rect{win.rect.x, win.rect.y - ctx.style.title_height, win.rect.w, win.rect.h + 2*ctx.style.title_height};
+		if mu.rect_overlaps_vec2(winRect, ctx.mouse_pos) {
+			editor.committed = false;
+			editor.drawUncommitted = false;
+		}
+		
+		if .ACTIVE in mu.header(ctx, "Draw Colour", {.EXPANDED}) {
+			mu.layout_row(ctx, {-78, -1}, 68);
+			mu.layout_begin_column(ctx);
+			{
+				mu.layout_row(ctx, {46, -1}, 0);
+				mu.label(ctx, "Red:");   u8_slider(ctx, &editor.drawColor.r, 0, 255);
+				mu.label(ctx, "Green:"); u8_slider(ctx, &editor.drawColor.g, 0, 255);
+				mu.label(ctx, "Blue:");  u8_slider(ctx, &editor.drawColor.b, 0, 255);
+			}
+			mu.layout_end_column(ctx);
+			
+			r := mu.layout_next(ctx);
+			mu.draw_rect(ctx, r, mu.Color(editor.drawColor));
+			mu.draw_box(ctx, mu.expand_rect(r, 1), ctx.style.colors[.BORDER]);
+			mu.draw_control_text(ctx, fmt.tprintf("#%02x%02x%02x", editor.drawColor.r, editor.drawColor.g, editor.drawColor.b), r, .TEXT, {.ALIGN_CENTER});
+		}
+		
+		if .ACTIVE in mu.header(ctx, "Background Colour", {.EXPANDED}) {
+			mu.layout_row(ctx, {-78, -1}, 68);
+			mu.layout_begin_column(ctx);
+			{
+				mu.layout_row(ctx, {46, -1}, 0);
+				mu.label(ctx, "Red:");   u8_slider(ctx, &editor.bg.r, 0, 255);
+				mu.label(ctx, "Green:"); u8_slider(ctx, &editor.bg.g, 0, 255);
+				mu.label(ctx, "Blue:");  u8_slider(ctx, &editor.bg.b, 0, 255);
+			}
+			mu.layout_end_column(ctx);
+			
+			r := mu.layout_next(ctx);
+			mu.draw_rect(ctx, r, editor.bg);
+			mu.draw_box(ctx, mu.expand_rect(r, 1), ctx.style.colors[.BORDER]);
+			mu.draw_control_text(ctx, fmt.tprintf("#%02x%02x%02x", editor.bg.r, editor.bg.g, editor.bg.b), r, .TEXT, {.ALIGN_CENTER});
+		}
+	}
 }
