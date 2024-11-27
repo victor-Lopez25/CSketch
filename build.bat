@@ -3,4 +3,5 @@
 set opts=-no-bounds-check -debug -vet -vet-using-param -vet-style
 
 odin build %cd% %opts%
-PixelSketch.exe sketch.bmp
+::PixelSketch.exe sketch.bmp
+PixelSketch.exe

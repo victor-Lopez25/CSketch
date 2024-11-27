@@ -6,6 +6,7 @@ import mu "vendor:microui"
 import "base:runtime"
 import "core:strings"
 import "core:time"
+import "core:math"
 import "core:fmt"
 import "core:mem"
 import "core:os"
@@ -107,6 +108,7 @@ EditorData :: struct {
 	allowBmpResize: b32,
 	committed: b32,
 	drawUncommitted: b32,
+	showOpenDialog: b32,
 	
 	dstRect: i32_rect,
 	commitRect: i32_rect,
@@ -208,6 +210,9 @@ LoadFromFile :: proc(editor: ^EditorData, fileName: cstring)
 		editor.bitmap.width = loadSurface.w;
 		editor.bitmap.height = loadSurface.h;
 		editor.bitmapCapacity = int(loadSurface.w*loadSurface.h);
+		
+		editor.dstRect.x = editor.windowWidth/4;
+		editor.dstRect.y = editor.windowHeight/5;
 		
 		// NOTE: If px format is not rgba32, change it so it is
 		when ODIN_ENDIAN == .Little {
@@ -723,7 +728,22 @@ render :: proc "contextless"(editor: ^EditorData)
 
 update :: proc(editor: ^EditorData, input: ^Input)
 {
-	editor.penSize = max(editor.penSize + input.scrollY, 1);
+	if input.ctrl.down {
+		editor.penSize = max(editor.penSize + input.scrollY, 1);
+	}
+	else {
+		prevGridScale := editor.gridScale;
+		editor.gridScale = clamp(editor.gridScale + input.scrollY, 4, 60);
+		if editor.gridScale != prevGridScale {
+			scaleFactor := f32(editor.gridScale)/f32(prevGridScale);
+			editor.dstRect.x = 
+				i32(math.round(f32(input.mousePos.x) - 
+											 f32(input.mousePos.x - editor.dstRect.x)*scaleFactor));
+			editor.dstRect.y = 
+				i32(math.round(f32(input.mousePos.y) -
+											 f32(input.mousePos.y - editor.dstRect.y)*scaleFactor));
+		}
+	}
 	
 	if input.mmb.down {
 		editor.dstRect.x += input.mousePos.x - input.prevMousePos.x;
@@ -859,12 +879,18 @@ main :: proc()
 					frameInput.ctrl.down = true;
 					frameInput.ctrl.timestamp = event.key.timestamp;
 				}
+				
+				case Key.o: {
+					if frameInput.ctrl.down {
+						editor.showOpenDialog = true;
+					}
+				}
 			}
 		}
 		else { // keyup
 #partial switch event.key.keysym.sym {
 			case Key.s: {
-				if(frameInput.ctrl.down) {
+				if frameInput.ctrl.down {
 					SaveToFile(editor, fileName);
 				}
 			}
@@ -1002,12 +1028,36 @@ u8_slider :: proc(ctx: ^mu.Context, val: ^u8, lo, hi: u8) -> (res: mu.Result_Set
 	return;
 }
 
+// same button as microui but it only submits on mouse up
+button_up :: proc(ctx: ^mu.Context, label: string, icon: mu.Icon = .NONE, opt: mu.Options = {.ALIGN_CENTER}) -> (res: mu.Result_Set) {
+	opt := opt;
+	opt += {.HOLD_FOCUS};
+	id := len(label) > 0 ? mu.get_id(ctx, label) : mu.get_id(ctx, uintptr(icon));
+	r := mu.layout_next(ctx);
+	if ctx.mouse_pressed_bits != {.MIDDLE} {
+		mu.update_control(ctx, id, r, opt);
+		/* handle click */
+		if ((ctx.mouse_released_bits == {.LEFT} || ctx.mouse_released_bits == {.RIGHT}) && ctx.focus_id == id) {
+			res += {.SUBMIT}
+		}
+	}
+	/* draw */
+	mu.draw_control_frame(ctx, id, r, .BUTTON, opt);
+	if len(label) > 0 {
+		mu.draw_control_text(ctx, label, r, .TEXT, opt);
+	}
+	if icon != .NONE {
+		mu.draw_icon(ctx, icon, r, ctx.style.colors[.TEXT]);
+	}
+	return;
+}
+
 ui_update :: proc(editor: ^EditorData) {
 	opts := mu.Options{.NO_CLOSE, .NO_SCROLL, .NO_RESIZE}
 	
 	ctx := &editor.uiContext;
 	
-	if mu.window(ctx, "Demo Window", {40, 260, 200, 224}, opts) {
+	if mu.window(ctx, "Color picker", {40, 260, 200, 224}, opts) {
 		win := mu.get_current_container(ctx);
 		winRect := mu.Rect{win.rect.x, win.rect.y - ctx.style.title_height, win.rect.w, win.rect.h + 2*ctx.style.title_height};
 		if mu.rect_overlaps_vec2(winRect, ctx.mouse_pos) {
@@ -1047,6 +1097,40 @@ ui_update :: proc(editor: ^EditorData) {
 			mu.draw_rect(ctx, r, editor.bg);
 			mu.draw_box(ctx, mu.expand_rect(r, 1), ctx.style.colors[.BORDER]);
 			mu.draw_control_text(ctx, fmt.tprintf("#%02x%02x%02x", editor.bg.r, editor.bg.g, editor.bg.b), r, .TEXT, {.ALIGN_CENTER});
+		}
+	}
+	
+	if editor.showOpenDialog {
+		opts = mu.Options{.NO_SCROLL, .NO_RESIZE, .AUTO_SIZE, .NO_CLOSE}
+		if mu.window(ctx, "Open file", {editor.windowWidth/3, 40, -1, -1}, opts) {
+			dirHandle, ferr := os.open(".");
+			fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
+			// TODO: only request this if changes happened
+			fileInfos : []os.File_Info = ---;
+			fileInfos, ferr = os.read_dir(dirHandle, 0);
+			fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
+			mu.layout_begin_column(ctx);
+			for fi in fileInfos {
+				mu.layout_row(ctx, {editor.windowWidth/3}, 20);
+				if !fi.is_dir { // ignore directories for now
+					if .SUBMIT in button_up(ctx, fi.name) {
+						filename := strings.clone_to_cstring(fi.name, context.temp_allocator);
+						LoadFromFile(editor, filename);
+						editor.showOpenDialog = false;
+					}
+				}
+			}
+			mu.layout_end_column(ctx);
+			
+			// TODO: only do this if changes happened
+			os.file_info_slice_delete(fileInfos);
+			
+			win := mu.get_current_container(ctx);
+			winRect := mu.Rect{win.rect.x, win.rect.y - ctx.style.title_height, win.rect.w, win.rect.h + 2*ctx.style.title_height};
+			if mu.rect_overlaps_vec2(winRect, ctx.mouse_pos) {
+				editor.committed = false;
+				editor.drawUncommitted = false;
+			}
 		}
 	}
 }
