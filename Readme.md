@@ -6,6 +6,8 @@ WARNING: This is not complete yet!
 
 Command line usage: `PixelSketch.exe [file.bmp]`
 
+Open file with ctrl+O, save with ctrl+S
+
 ## Dependencies
 
 - [SDL2](https://wiki.libsdl.org/SDL2/FrontPage)
