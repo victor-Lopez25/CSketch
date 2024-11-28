@@ -675,8 +675,10 @@ render :: proc "contextless"(editor: ^EditorData)
 		sdl.RenderFillRect(editor.renderer, &editor.uncommitRect);
 	}
 	
-	sdl.SetRenderDrawColor(editor.renderer, 86, 86, 0, 255);
-	DrawGrid(editor);
+	if editor.gridScale >= 15 {
+		sdl.SetRenderDrawColor(editor.renderer, 86, 86, 0, 255);
+		DrawGrid(editor);
+	}
 	sdl.SetRenderDrawColor(editor.renderer, 255, 255, 255, 255);
 	DrawBitmapBounds(editor);
 	
