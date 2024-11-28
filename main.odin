@@ -887,6 +887,10 @@ main :: proc()
 						editor.showOpenDialog = true;
 					}
 				}
+				
+				case Key.ESCAPE: {
+					editor.showOpenDialog = false;
+				}
 			}
 		}
 		else { // keyup
@@ -1103,7 +1107,7 @@ ui_update :: proc(editor: ^EditorData) {
 	}
 	
 	if editor.showOpenDialog {
-		opts = mu.Options{.NO_SCROLL, .NO_RESIZE, .AUTO_SIZE, .NO_CLOSE}
+		opts = mu.Options{.NO_SCROLL, .NO_RESIZE, .AUTO_SIZE, .NO_CLOSE, .NO_TITLE}
 		if mu.window(ctx, "Open file", {editor.windowWidth/3, 40, -1, -1}, opts) {
 			dirHandle, ferr := os.open(".");
 			fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
