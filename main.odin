@@ -12,6 +12,15 @@ import "core:mem"
 import "core:os"
 import "core:c"
 
+when ODIN_OS == .Windows {
+	foreign import kernel32 "system:Kernel32.lib"
+		
+		@(default_calling_convention="system")
+		foreign kernel32 {
+		GetLogicalDriveStringsA :: proc(nBufferLength: u32, lpBuffer: ^u8) -> u32 ---
+	}
+}
+
 /* DISCLAIMER:
 This doesn't do what I want it to do yet!
 */
@@ -113,6 +122,8 @@ EditorData :: struct {
 	dstRect: i32_rect,
 	commitRect: i32_rect,
 	uncommitRect: i32_rect,
+	
+	currentDirectory: strings.Builder,
 }
 
 DrawGrid :: proc "contextless" (editor: ^EditorData)
@@ -650,6 +661,9 @@ EditorInitAll :: proc() -> ^EditorData
 	editor.drawColor.b = 86;
 	editor.drawColor.a = 255;
 	
+	temp := os.get_current_directory(context.temp_allocator);
+	strings.write_string(&editor.currentDirectory, temp);
+	
 	return editor;
 }
 
@@ -679,6 +693,7 @@ render :: proc "contextless"(editor: ^EditorData)
 		sdl.SetRenderDrawColor(editor.renderer, 86, 86, 0, 255);
 		DrawGrid(editor);
 	}
+	
 	sdl.SetRenderDrawColor(editor.renderer, 255, 255, 255, 255);
 	DrawBitmapBounds(editor);
 	
@@ -734,6 +749,7 @@ update :: proc(editor: ^EditorData, input: ^Input)
 		editor.penSize = max(editor.penSize + input.scrollY, 1);
 	}
 	else {
+		// zoom
 		prevGridScale := editor.gridScale;
 		editor.gridScale = clamp(editor.gridScale + input.scrollY, 4, 60);
 		if editor.gridScale != prevGridScale {
@@ -1018,6 +1034,7 @@ deltaTime = f32(time.duration_seconds(duration));
 delete(editor.bitmap.bytes);
 sdl.DestroyWindow(editor.window);
 sdl.DestroyRenderer(editor.renderer);
+strings.builder_destroy(&editor.currentDirectory);
 free(editor);
 sdl.Quit();
 }
@@ -1035,6 +1052,7 @@ u8_slider :: proc(ctx: ^mu.Context, val: ^u8, lo, hi: u8) -> (res: mu.Result_Set
 }
 
 // same button as microui but it only submits on mouse up
+// meant to be used when the window changes size/position due to a button .SUBMIT
 button_up :: proc(ctx: ^mu.Context, label: string, icon: mu.Icon = .NONE, opt: mu.Options = {.ALIGN_CENTER}) -> (res: mu.Result_Set) {
 	opt := opt;
 	opt += {.HOLD_FOCUS};
@@ -1056,6 +1074,113 @@ button_up :: proc(ctx: ^mu.Context, label: string, icon: mu.Icon = .NONE, opt: m
 		mu.draw_icon(ctx, icon, r, ctx.style.colors[.TEXT]);
 	}
 	return;
+}
+
+MoveUpDirPath :: proc(path: ^strings.Builder)
+{
+	when ODIN_OS == .Windows {
+		if len(path.buf) <= 3 { // C:/
+			strings.builder_reset(path);
+			return;
+		}
+	}
+	
+	i : int = len(path.buf) - 1;
+	for ;i > 0; i -= 1
+	{
+		if path.buf[i] == '\\' {
+			break;
+		}
+	}
+	
+	resize(&path.buf, i);
+}
+
+when ODIN_OS == .Windows {
+	ui_WindowsOpenDrivesDialog :: proc(editor: ^EditorData, ctx: ^mu.Context)
+	{
+		driveNames: [61]u8; // enough space for 20 drive letters
+		namesLen := GetLogicalDriveStringsA(61, &driveNames[0]); // nBufferLength is in u8s
+		assert(namesLen <= 120, "need bigger size :3");
+		
+		mu.label(ctx, " ");
+		
+		mu.layout_begin_column(ctx);
+		for i : u32 = 0; i <= namesLen; i += 1
+		{
+			mu.layout_row(ctx, {editor.windowWidth/3}, 20);
+			driveName := string(cstring(&driveNames[i]));
+			if .SUBMIT in button_up(ctx, driveName) {
+				strings.write_string(&editor.currentDirectory, driveName);
+			}
+			
+			i += u32(len(driveName));
+			if driveNames[i + 1] == 0 do break;
+		}
+		mu.layout_end_column(ctx);
+	}
+}
+
+ui_GeneralOpenDialog :: proc(editor: ^EditorData, ctx: ^mu.Context)
+{
+	dirHandle, ferr := os.open(string(editor.currentDirectory.buf[:]));
+	if ferr == .BAD_NETPATH {
+		MoveUpDirPath(&editor.currentDirectory);
+		when ODIN_OS == .Windows {
+			if len(editor.currentDirectory.buf) == 0 {
+				ui_WindowsOpenDrivesDialog(editor, ctx);
+				ui_AvoidMainProgramBehaviour(editor, ctx);
+				return;
+			}
+		}
+		dirHandle, ferr = os.open(string(editor.currentDirectory.buf[:]));
+	}
+	
+	fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
+	// TODO: only request this if changes happened
+	fileInfos : []os.File_Info = ---;
+	fileInfos, ferr = os.read_dir(dirHandle, 0);
+	fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
+	mu.layout_begin_column(ctx);
+	
+	mu.layout_row(ctx, {editor.windowWidth/3}, 20);
+	mu.label(ctx, string(editor.currentDirectory.buf[:]));
+	
+	// NOTE: On linux, len(root_dir_str) == 1. You shouldn't be able to go up a directory more
+	if len(editor.currentDirectory.buf) > 1 {
+		mu.layout_row(ctx, {editor.windowWidth/3}, 20);
+		if .SUBMIT in mu.button(ctx, "..") {
+			MoveUpDirPath(&editor.currentDirectory);
+		}
+	}
+	
+	for fi in fileInfos {
+		mu.layout_row(ctx, {editor.windowWidth/3}, 20);
+		if fi.is_dir {
+			if .SUBMIT in button_up(ctx, fi.name) {
+				strings.write_byte(&editor.currentDirectory, '\\');
+				strings.write_string(&editor.currentDirectory, fi.name);
+			}
+		}
+		else if .SUBMIT in button_up(ctx, fi.name) {
+			filename := strings.clone_to_cstring(fi.fullpath, context.temp_allocator);
+			LoadFromFile(editor, filename);
+			editor.showOpenDialog = false;
+		}
+	}
+	mu.layout_end_column(ctx);
+	
+	// TODO: only do this if changes happened
+	os.file_info_slice_delete(fileInfos);
+}
+
+ui_AvoidMainProgramBehaviour :: proc(editor: ^EditorData, ctx: ^mu.Context)
+{
+	win := mu.get_current_container(ctx);
+	if mu.rect_overlaps_vec2(win.rect, ctx.mouse_pos) {
+		editor.committed = false;
+		editor.drawUncommitted = false;
+	}
 }
 
 ui_update :: proc(editor: ^EditorData) {
@@ -1108,34 +1233,19 @@ ui_update :: proc(editor: ^EditorData) {
 	
 	if editor.showOpenDialog {
 		opts = mu.Options{.NO_SCROLL, .NO_RESIZE, .AUTO_SIZE, .NO_CLOSE, .NO_TITLE}
-		if mu.window(ctx, "Open file", {editor.windowWidth/3, 40, -1, -1}, opts) {
-			dirHandle, ferr := os.open(".");
-			fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
-			// TODO: only request this if changes happened
-			fileInfos : []os.File_Info = ---;
-			fileInfos, ferr = os.read_dir(dirHandle, 0);
-			fmt.assertf(ferr == nil, "Could not read directory: %v", ferr);
-			mu.layout_begin_column(ctx);
-			for fi in fileInfos {
-				mu.layout_row(ctx, {editor.windowWidth/3}, 20);
-				if !fi.is_dir { // ignore directories for now
-					if .SUBMIT in button_up(ctx, fi.name) {
-						filename := strings.clone_to_cstring(fi.name, context.temp_allocator);
-						LoadFromFile(editor, filename);
-						editor.showOpenDialog = false;
-					}
+		if mu.window(ctx, "Open file", {editor.windowWidth/3, 20, -1, -1}, opts) {
+			if len(editor.currentDirectory.buf) == 0 {
+				when ODIN_OS == .Windows {
+					ui_WindowsOpenDrivesDialog(editor, ctx);
+					ui_AvoidMainProgramBehaviour(editor, ctx);
+				}
+				else {
+					assert(false, "unreachable");
 				}
 			}
-			mu.layout_end_column(ctx);
-			
-			// TODO: only do this if changes happened
-			os.file_info_slice_delete(fileInfos);
-			
-			win := mu.get_current_container(ctx);
-			winRect := mu.Rect{win.rect.x, win.rect.y - ctx.style.title_height, win.rect.w, win.rect.h + 2*ctx.style.title_height};
-			if mu.rect_overlaps_vec2(winRect, ctx.mouse_pos) {
-				editor.committed = false;
-				editor.drawUncommitted = false;
+			else {
+				ui_GeneralOpenDialog(editor, ctx);
+				ui_AvoidMainProgramBehaviour(editor, ctx);
 			}
 		}
 	}
