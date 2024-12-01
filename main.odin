@@ -671,7 +671,7 @@ EditorInitAll :: proc() -> ^EditorData
 render :: proc "contextless"(editor: ^EditorData)
 {
 	// only push committed graphics onto cpu bitmap
-	if editor.committed && !editor.uiFocus {
+	if editor.committed {
 		CPUFillRect(&editor.bitmap, editor.commitRect, editor.drawColor);
 	}
 	
