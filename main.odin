@@ -118,6 +118,7 @@ EditorData :: struct {
 	committed: b32,
 	drawUncommitted: b32,
 	showOpenDialog: b32,
+	uiFocus: b32,
 	
 	dstRect: i32_rect,
 	commitRect: i32_rect,
@@ -670,7 +671,7 @@ EditorInitAll :: proc() -> ^EditorData
 render :: proc "contextless"(editor: ^EditorData)
 {
 	// only push committed graphics onto cpu bitmap
-	if editor.committed {
+	if editor.committed && !editor.uiFocus {
 		CPUFillRect(&editor.bitmap, editor.commitRect, editor.drawColor);
 	}
 	
@@ -683,7 +684,7 @@ render :: proc "contextless"(editor: ^EditorData)
 	
 	RenderFromBitmap(editor);
 	// draw uncommitted graphics here
-	if editor.drawUncommitted {
+	if !editor.uiFocus && editor.drawUncommitted {
 		sdl.SetRenderDrawColor(editor.renderer, 
 													 editor.drawColor.r, editor.drawColor.g, editor.drawColor.b, editor.drawColor.a);
 		sdl.RenderFillRect(editor.renderer, &editor.uncommitRect);
@@ -811,7 +812,7 @@ update :: proc(editor: ^EditorData, input: ^Input)
 		drawSize, drawSize,
 	}
 	
-	if input.lmb.up {
+	if input.lmb.up && !editor.uiFocus {
 		if editor.allowBmpResize {
 			ExpandMap(editor, &editor.commitRect);
 		}
@@ -1001,17 +1002,19 @@ frameInput.timestamp = sdl.GetTicks();
 mu.input_mouse_move(&editor.uiContext, frameInput.mousePos.x, frameInput.mousePos.y);
 
 if !pause {
-	update(editor, &frameInput);
-	
 	mu.begin(&editor.uiContext);
 	ui_update(editor);
 	mu.end(&editor.uiContext);
+	// ui first to get editor.uiFocus bool
+	
+	update(editor, &frameInput);
 	
 	render(editor);
 }
 
 frameInput.prevMousePos = frameInput.mousePos;
 editor.committed = false;
+editor.uiFocus = false;
 
 ////////////////////////////////
 // end frame
@@ -1178,8 +1181,7 @@ ui_AvoidMainProgramBehaviour :: proc(editor: ^EditorData, ctx: ^mu.Context)
 {
 	win := mu.get_current_container(ctx);
 	if mu.rect_overlaps_vec2(win.rect, ctx.mouse_pos) {
-		editor.committed = false;
-		editor.drawUncommitted = false;
+		editor.uiFocus = true;
 	}
 }
 
@@ -1193,7 +1195,7 @@ ui_update :: proc(editor: ^EditorData) {
 		winRect := mu.Rect{win.rect.x, win.rect.y - ctx.style.title_height, win.rect.w, win.rect.h + 2*ctx.style.title_height};
 		if mu.rect_overlaps_vec2(winRect, ctx.mouse_pos) {
 			editor.committed = false;
-			editor.drawUncommitted = false;
+			editor.uiFocus = true;
 		}
 		
 		if .ACTIVE in mu.header(ctx, "Draw Colour", {.EXPANDED}) {
